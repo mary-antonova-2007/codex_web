@@ -116,6 +116,7 @@ export function createThreadStateHelpers({
   getLiveThreadEntries,
   messagesFromThreadItem,
   normalizeStatus,
+  saveRuntimeState,
   state,
   textFromAgentItem,
   textFromUserItem,
@@ -334,6 +335,7 @@ export function createThreadStateHelpers({
       id: fallback.id,
       text: fallback.text,
     });
+    saveRuntimeState();
   }
 
   function clearFinalAssistantFallback(threadId, turnId) {
@@ -342,6 +344,7 @@ export function createThreadStateHelpers({
     }
 
     state.finalAssistantFallbacks.delete(finalAssistantFallbackKey(threadId, turnId));
+    saveRuntimeState();
   }
 
   function clearResolvedFinalAssistantFallbacks(thread) {
@@ -354,6 +357,7 @@ export function createThreadStateHelpers({
         clearFinalAssistantFallback(thread.id, turn.id);
       }
     }
+    saveRuntimeState();
   }
 
   function messagesFromLiveEntry(entry) {

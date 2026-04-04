@@ -11,7 +11,7 @@ export function textFromUserItem(item) {
       if (contentItem.type === "image" || contentItem.type === "input_image") {
         return `[image] ${contentItem.image_url}`;
       }
-      if (contentItem.type === "local_image") {
+      if (contentItem.type === "local_image" || contentItem.type === "localImage") {
         return `[local image] ${contentItem.path || ""}`;
       }
       if (contentItem.type === "skill") {
@@ -121,6 +121,7 @@ export function messagesFromThreadItem(item) {
 
   if (item.type === "userMessage") {
     return [{
+      content: item.content || [],
       id: item.id,
       meta: "You",
       role: "user",
@@ -262,9 +263,135 @@ export function messagesFromThreadItem(item) {
 export function createMessageRenderer({
   elements,
   escapeHtml,
+  renderRichTextHtml,
   toMessageHtml,
   updateScrollButton,
 }) {
+  function attachmentUrl(path) {
+    return `/api/attachments/file?path=${encodeURIComponent(path)}`;
+  }
+
+  function parseAttachmentMarkers(text = "") {
+    const lines = String(text || "").replaceAll("\r\n", "\n").split("\n");
+    const attachments = [];
+    const textLines = [];
+
+    for (const line of lines) {
+      const localImageMatch = line.match(/^\[local image\]\s+(.+)$/i);
+      if (localImageMatch) {
+        attachments.push({
+          kind: "image",
+          path: localImageMatch[1].trim(),
+        });
+        continue;
+      }
+
+      const mentionMatch = line.match(/^\[mention\]\s+(.+)$/i);
+      if (mentionMatch) {
+        const path = mentionMatch[1].trim();
+        attachments.push({
+          kind: "file",
+          name: path.split("/").pop() || path,
+          path,
+        });
+        continue;
+      }
+
+      textLines.push(line);
+    }
+
+    return {
+      attachments,
+      text: textLines.join("\n").trim(),
+    };
+  }
+
+  function renderUserMessageHtml(message) {
+    const content = Array.isArray(message.content) ? message.content : [];
+    const blocks = [];
+    const textParts = [];
+
+    if (content.length) {
+      for (const item of content) {
+        if (item.type === "text" || item.type === "input_text") {
+          if (item.text) {
+            const parsed = parseAttachmentMarkers(item.text);
+            if (parsed.text) {
+              textParts.push(parsed.text);
+            }
+
+            for (const attachment of parsed.attachments) {
+              if (attachment.kind === "image") {
+                blocks.push(`
+                  <a class="user-attachment-thumb-link" href="${attachmentUrl(attachment.path)}" target="_blank" rel="noreferrer">
+                    <img class="user-attachment-thumb" src="${attachmentUrl(attachment.path)}" alt="Attached image" />
+                  </a>
+                `);
+              } else {
+                blocks.push(`
+                  <a class="user-attachment-file" href="${attachmentUrl(attachment.path)}" target="_blank" rel="noreferrer">
+                    <span class="user-attachment-file-icon">FILE</span>
+                    <span class="user-attachment-file-name">${escapeHtml(attachment.name || attachment.path)}</span>
+                  </a>
+                `);
+              }
+            }
+          }
+          continue;
+        }
+
+        if ((item.type === "local_image" || item.type === "localImage") && item.path) {
+          blocks.push(`
+            <a class="user-attachment-thumb-link" href="${attachmentUrl(item.path)}" target="_blank" rel="noreferrer">
+              <img class="user-attachment-thumb" src="${attachmentUrl(item.path)}" alt="Attached image" />
+            </a>
+          `);
+          continue;
+        }
+
+        if (item.type === "mention") {
+          const label = item.name || item.path || "file";
+          const href = item.path ? attachmentUrl(item.path) : "#";
+          blocks.push(`
+            <a class="user-attachment-file" href="${href}" target="_blank" rel="noreferrer">
+              <span class="user-attachment-file-icon">FILE</span>
+              <span class="user-attachment-file-name">${escapeHtml(label)}</span>
+            </a>
+          `);
+        }
+      }
+    } else if (message.text) {
+      const parsed = parseAttachmentMarkers(message.text);
+      if (parsed.text) {
+        textParts.push(parsed.text);
+      }
+
+      for (const attachment of parsed.attachments) {
+        if (attachment.kind === "image") {
+          blocks.push(`
+            <a class="user-attachment-thumb-link" href="${attachmentUrl(attachment.path)}" target="_blank" rel="noreferrer">
+              <img class="user-attachment-thumb" src="${attachmentUrl(attachment.path)}" alt="Attached image" />
+            </a>
+          `);
+        } else {
+          blocks.push(`
+            <a class="user-attachment-file" href="${attachmentUrl(attachment.path)}" target="_blank" rel="noreferrer">
+              <span class="user-attachment-file-icon">FILE</span>
+              <span class="user-attachment-file-name">${escapeHtml(attachment.name || attachment.path)}</span>
+            </a>
+          `);
+        }
+      }
+    }
+
+    const textHtml = textParts.length ? `<p>${toMessageHtml(textParts.join("\n"))}</p>` : "";
+    const attachmentsHtml = blocks.length
+      ? `<div class="user-attachments-grid">${blocks.join("")}</div>`
+      : "";
+
+    return `${textHtml}${attachmentsHtml}` || toMessageHtml(message.text);
+  }
+
   function renderDiffHtml(text) {
     const lines = String(text || "").split("\n");
     const body = lines
@@ -310,6 +437,10 @@ export function createMessageRenderer({
       body = renderDiffHtml(message.text);
     } else if (message.kind === "terminal") {
       body = renderTerminalHtml(message);
+    } else if (message.role === "user") {
+      body = renderUserMessageHtml(message);
+    } else if (message.role === "assistant" || message.role === "commentary") {
+      body = renderRichTextHtml(message.text);
     } else {
       body = toMessageHtml(message.text);
     }
@@ -348,6 +479,10 @@ export function createMessageRenderer({
         body.innerHTML = renderDiffHtml(message.text);
       } else if (message.kind === "terminal") {
         body.innerHTML = renderTerminalHtml(message);
+      } else if (message.role === "user") {
+        body.innerHTML = renderUserMessageHtml(message);
+      } else if (message.role === "assistant" || message.role === "commentary") {
+        body.innerHTML = renderRichTextHtml(message.text);
       } else {
         body.innerHTML = toMessageHtml(message.text);
       }

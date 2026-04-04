@@ -1,18 +1,22 @@
 import { createReadStream, existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { extname, join, normalize, basename } from "node:path";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 
 const host = "127.0.0.1";
 const port = 4173;
 const root = "/root/codex-site";
+const uploadsRoot = "/root/.codex-site-uploads";
 const codexAppServerUrl = "ws://127.0.0.1:4174";
 const codexHome = process.env.CODEX_HOME || "/root/.codex";
 const codexAppServerArgs = ["app-server", "--listen", "ws://127.0.0.1:4174"];
 const execFileAsync = promisify(execFile);
+const sessionsRoot = "/root/.codex/sessions";
+const threadRenderableItemsCache = new Map();
 
 function json(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -34,6 +38,43 @@ async function readRequestBody(req) {
     chunks.push(chunk);
   }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+}
+
+function sanitizeFilename(name = "attachment") {
+  const safeBase = basename(String(name || "attachment"))
+    .replace(/[^\w.\-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return safeBase || "attachment";
+}
+
+async function saveAttachment(payload = {}) {
+  const base64 = String(payload.dataBase64 || "");
+  if (!base64) {
+    throw new Error("Attachment payload is empty");
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) {
+    throw new Error("Attachment payload is invalid");
+  }
+
+  if (buffer.length > 25 * 1024 * 1024) {
+    throw new Error("Attachment is too large. Max size is 25 MB.");
+  }
+
+  await mkdir(uploadsRoot, { recursive: true });
+  const filename = `${Date.now()}-${randomUUID()}-${sanitizeFilename(payload.name)}`;
+  const filePath = join(uploadsRoot, filename);
+  await writeFile(filePath, buffer);
+
+  return {
+    mimeType: payload.mimeType || "application/octet-stream",
+    name: payload.name || filename,
+    path: filePath,
+    size: buffer.length,
+  };
 }
 
 async function isAppServerRunning() {
@@ -108,6 +149,324 @@ const mimeTypes = {
   ".ico": "image/x-icon",
 };
 
+function resolveUploadPath(rawPath = "") {
+  const normalizedPath = normalize(String(rawPath || ""));
+  if (!normalizedPath.startsWith(uploadsRoot)) {
+    return null;
+  }
+
+  return normalizedPath;
+}
+
+function resolveSessionPath(rawPath = "") {
+  const normalizedPath = normalize(String(rawPath || ""));
+  if (!normalizedPath.startsWith(sessionsRoot) || !normalizedPath.endsWith(".jsonl")) {
+    return null;
+  }
+
+  return normalizedPath;
+}
+
+function safeJsonParse(text, fallback = null) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeNewlines(text = "") {
+  return String(text || "").replaceAll("\r\n", "\n");
+}
+
+function parseCommandCallOutput(output = "") {
+  const normalizedOutput = normalizeNewlines(output);
+  const command = normalizedOutput.match(/^Command:\s+([^\n]+)$/m)?.[1] || "";
+  const sessionId = normalizedOutput.match(/Process running with session ID (\d+)/)?.[1] || null;
+  const didExit = /Process exited with code -?\d+/.test(normalizedOutput);
+  const marker = "\nOutput:\n";
+  const markerIndex = normalizedOutput.indexOf(marker);
+
+  return {
+    aggregatedOutput: markerIndex >= 0 ? normalizedOutput.slice(markerIndex + marker.length) : "",
+    command,
+    sessionId,
+    status: didExit ? "completed" : sessionId ? "running" : "",
+  };
+}
+
+function parseApplyPatchInput(input = "") {
+  const lines = normalizeNewlines(input).split("\n");
+  const changes = [];
+  let currentChange = null;
+
+  function pushCurrentChange() {
+    if (!currentChange) {
+      return;
+    }
+
+    const diff = currentChange.diffLines.join("\n").trimEnd();
+    changes.push({
+      diff,
+      kind: currentChange.kind,
+      path: currentChange.path,
+    });
+    currentChange = null;
+  }
+
+  for (const line of lines) {
+    if (line === "*** Begin Patch" || line === "*** End Patch" || line === "*** End of File") {
+      continue;
+    }
+
+    if (line.startsWith("*** Add File: ")) {
+      pushCurrentChange();
+      currentChange = {
+        diffLines: [],
+        kind: { type: "add" },
+        path: line.slice("*** Add File: ".length).trim(),
+      };
+      continue;
+    }
+
+    if (line.startsWith("*** Update File: ")) {
+      pushCurrentChange();
+      currentChange = {
+        diffLines: [],
+        kind: { type: "update" },
+        path: line.slice("*** Update File: ".length).trim(),
+      };
+      continue;
+    }
+
+    if (line.startsWith("*** Delete File: ")) {
+      pushCurrentChange();
+      changes.push({
+        diff: "(deleted)",
+        kind: { type: "delete" },
+        path: line.slice("*** Delete File: ".length).trim(),
+      });
+      continue;
+    }
+
+    if (line.startsWith("*** Move to: ")) {
+      continue;
+    }
+
+    if (!currentChange) {
+      continue;
+    }
+
+    if (currentChange.kind.type === "add") {
+      if (line.startsWith("+")) {
+        currentChange.diffLines.push(line.slice(1));
+      }
+      continue;
+    }
+
+    currentChange.diffLines.push(line);
+  }
+
+  pushCurrentChange();
+  return changes.filter((change) => change.path);
+}
+
+function buildRenderableTurnsFromSession(rawSession = "") {
+  const turns = new Map();
+  const pendingToolCalls = new Map();
+  let currentTurnId = null;
+  let nextSyntheticId = 1;
+
+  function nextId(prefix, turnId) {
+    const normalizedTurnId = String(turnId || "unknown").replace(/[^\w.-]+/g, "-");
+    const id = `${prefix}-${normalizedTurnId}-${nextSyntheticId}`;
+    nextSyntheticId += 1;
+    return id;
+  }
+
+  function ensureTurn(turnId) {
+    if (!turnId) {
+      return null;
+    }
+
+    let turn = turns.get(turnId);
+    if (!turn) {
+      turn = {
+        _commandsBySessionId: new Map(),
+        id: turnId,
+        items: [],
+        status: "inProgress",
+      };
+      turns.set(turnId, turn);
+    }
+
+    return turn;
+  }
+
+  for (const line of rawSession.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const entry = safeJsonParse(trimmed);
+    if (!entry) {
+      continue;
+    }
+
+    if (entry.type === "event_msg") {
+      const payload = entry.payload || {};
+
+      if (payload.type === "task_started" && payload.turn_id) {
+        currentTurnId = payload.turn_id;
+        ensureTurn(currentTurnId);
+        continue;
+      }
+
+      if (payload.type === "task_complete") {
+        const completedTurn = ensureTurn(payload.turn_id || currentTurnId);
+        if (completedTurn) {
+          completedTurn.status = "completed";
+        }
+        currentTurnId = null;
+        continue;
+      }
+
+      if (!currentTurnId) {
+        continue;
+      }
+
+      const turn = ensureTurn(currentTurnId);
+      if (!turn) {
+        continue;
+      }
+
+      if (payload.type === "user_message" && payload.message) {
+        turn.items.push({
+          content: [{
+            text: String(payload.message),
+            type: "text",
+          }],
+          id: nextId("session-user", currentTurnId),
+          type: "userMessage",
+        });
+        continue;
+      }
+
+      if (payload.type === "agent_message" && payload.message) {
+        turn.items.push({
+          id: nextId("session-agent", currentTurnId),
+          phase: payload.phase,
+          text: String(payload.message),
+          type: "agentMessage",
+        });
+      }
+      continue;
+    }
+
+    if (entry.type === "turn_context" && entry.payload?.turn_id) {
+      currentTurnId = entry.payload.turn_id;
+      ensureTurn(currentTurnId);
+      continue;
+    }
+
+    if (entry.type !== "response_item") {
+      continue;
+    }
+
+    const payload = entry.payload || {};
+    if (payload.type === "function_call" && payload.call_id) {
+      pendingToolCalls.set(payload.call_id, {
+        arguments: safeJsonParse(payload.arguments, {}),
+        name: payload.name || "",
+        turnId: currentTurnId,
+      });
+      continue;
+    }
+
+    if (payload.type === "function_call_output" && payload.call_id) {
+      const toolCall = pendingToolCalls.get(payload.call_id);
+      if (!toolCall?.turnId) {
+        continue;
+      }
+
+      const turn = ensureTurn(toolCall.turnId);
+      if (!turn) {
+        continue;
+      }
+
+      if (toolCall.name === "exec_command" || toolCall.name === "write_stdin") {
+        const parsedOutput = parseCommandCallOutput(payload.output);
+        const declaredSessionId = toolCall.name === "write_stdin"
+          ? String(toolCall.arguments?.session_id || "")
+          : "";
+        const sessionId = parsedOutput.sessionId || declaredSessionId || null;
+        const commandId = sessionId ? `session-command-${sessionId}` : `session-command-${payload.call_id}`;
+        let commandItem = sessionId ? turn._commandsBySessionId.get(sessionId) : null;
+
+        if (!commandItem) {
+          commandItem = {
+            aggregatedOutput: "",
+            command: parsedOutput.command || String(toolCall.arguments?.cmd || ""),
+            commandActions: [],
+            cwd: "/root",
+            id: commandId,
+            status: parsedOutput.status || "completed",
+            type: "commandExecution",
+          };
+          turn.items.push(commandItem);
+          if (sessionId) {
+            turn._commandsBySessionId.set(sessionId, commandItem);
+          }
+        }
+
+        commandItem.command = commandItem.command || parsedOutput.command || String(toolCall.arguments?.cmd || "");
+        commandItem.aggregatedOutput = `${commandItem.aggregatedOutput || ""}${parsedOutput.aggregatedOutput || ""}`;
+        commandItem.status = parsedOutput.status || commandItem.status || "completed";
+      }
+      continue;
+    }
+
+    if (payload.type === "custom_tool_call" && payload.name === "apply_patch" && payload.status === "completed" && currentTurnId) {
+      const turn = ensureTurn(currentTurnId);
+      const changes = parseApplyPatchInput(payload.input);
+      if (turn && changes.length) {
+        turn.items.push({
+          changes,
+          id: `session-diff-${payload.call_id}`,
+          status: "completed",
+          type: "fileChange",
+        });
+      }
+    }
+  }
+
+  return Array.from(turns.values()).map((turn) => ({
+    id: turn.id,
+    items: turn.items.map((item) => ({ ...item })),
+    status: turn.status || "completed",
+  }));
+}
+
+async function loadRenderableTurns(sessionPath) {
+  const filePath = resolveSessionPath(sessionPath);
+  if (!filePath || !existsSync(filePath)) {
+    throw new Error("Session file not found");
+  }
+
+  const fileStats = await stat(filePath);
+  const cacheKey = `${fileStats.mtimeMs}:${fileStats.size}`;
+  const cached = threadRenderableItemsCache.get(filePath);
+  if (cached?.cacheKey === cacheKey) {
+    return cached.turns;
+  }
+
+  const rawSession = await readFile(filePath, "utf8");
+  const turns = buildRenderableTurnsFromSession(rawSession);
+  threadRenderableItemsCache.set(filePath, { cacheKey, turns });
+  return turns;
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${host}:${port}`);
 
@@ -142,6 +501,70 @@ const server = createServer(async (req, res) => {
       json(res, 200, { ok: true, stdout: result.stdout, stderr: result.stderr });
     } catch (error) {
       json(res, 500, { error: error.message || "Failed to install skill" });
+    }
+    return;
+  }
+
+  if (req.url === "/api/attachments" && req.method === "POST") {
+    try {
+      const payload = await readRequestBody(req);
+      const files = Array.isArray(payload.files) ? payload.files : [];
+      if (!files.length) {
+        json(res, 400, { error: "No files provided" });
+        return;
+      }
+
+      const savedFiles = [];
+      for (const file of files) {
+        savedFiles.push(await saveAttachment(file));
+      }
+
+      json(res, 200, { files: savedFiles });
+    } catch (error) {
+      json(res, 500, { error: error.message || "Failed to store attachments" });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/thread/renderable-items" && req.method === "GET") {
+    const sessionPath = resolveSessionPath(url.searchParams.get("path"));
+    if (!sessionPath) {
+      json(res, 400, { error: "Invalid session path" });
+      return;
+    }
+
+    try {
+      json(res, 200, { turns: await loadRenderableTurns(sessionPath) });
+    } catch (error) {
+      json(res, 500, { error: error.message || "Failed to read thread renderable items" });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/attachments/file" && req.method === "GET") {
+    const filePath = resolveUploadPath(url.searchParams.get("path"));
+    if (!filePath || !existsSync(filePath)) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Not found");
+      return;
+    }
+
+    try {
+      const fileStat = await stat(filePath);
+      if (fileStat.isDirectory()) {
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Forbidden");
+        return;
+      }
+
+      res.writeHead(200, {
+        "Cache-Control": "no-cache",
+        "Content-Type": mimeTypes[extname(filePath).toLowerCase()] || "application/octet-stream",
+      });
+      createReadStream(filePath).pipe(res);
+    } catch {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Server error");
     }
     return;
   }

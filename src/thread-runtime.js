@@ -16,6 +16,8 @@ export function createThreadRuntimeHelpers({
   reconcileOptimisticUserItems,
   removePendingAssistantMessage,
   removePendingLiveItem,
+  saveLiveThreadItems,
+  saveRuntimeState,
   scrollMessagesToBottom,
   setFinalAssistantFallback,
   setThreadActivityFromItem,
@@ -32,6 +34,7 @@ export function createThreadRuntimeHelpers({
   upsertMessageElement,
 }) {
   function clearPendingStateForThread(threadId) {
+    let changed = false;
     for (const [itemId, pending] of state.pendingAssistantMessages) {
       if (pending.threadId !== threadId) {
         continue;
@@ -40,6 +43,7 @@ export function createThreadRuntimeHelpers({
       state.pendingAssistantMessages.delete(itemId);
       cleanupStreamState(itemId);
       removeMessageElement(itemId);
+      changed = true;
     }
 
     for (const [itemId, pending] of state.pendingLiveItems) {
@@ -50,6 +54,11 @@ export function createThreadRuntimeHelpers({
       state.pendingLiveItems.delete(itemId);
       cleanupStreamState(itemId);
       removeMessageElement(itemId);
+      changed = true;
+    }
+
+    if (changed) {
+      saveRuntimeState();
     }
   }
 
@@ -112,6 +121,7 @@ export function createThreadRuntimeHelpers({
     } else {
       state.liveThreadItems.delete(threadId);
     }
+    saveLiveThreadItems();
     return true;
   }
 
@@ -175,6 +185,7 @@ export function createThreadRuntimeHelpers({
       return;
     }
 
+    let changed = false;
     for (const [itemId, pending] of state.pendingAssistantMessages) {
       if (pending.threadId !== thread.id) {
         continue;
@@ -190,6 +201,7 @@ export function createThreadRuntimeHelpers({
       if (!state.streamRenderState.has(itemId)) {
         removeMessageElement(itemId);
       }
+      changed = true;
     }
 
     for (const [itemId, pending] of state.pendingLiveItems) {
@@ -215,6 +227,11 @@ export function createThreadRuntimeHelpers({
       state.pendingLiveItems.delete(itemId);
       cleanupStreamState(itemId);
       removeMessageElement(itemId);
+      changed = true;
+    }
+
+    if (changed) {
+      saveRuntimeState();
     }
   }
 
@@ -233,6 +250,7 @@ export function createThreadRuntimeHelpers({
       state.activeTurnId = null;
       stopActiveThreadSync();
       renderComposerState(state);
+      saveRuntimeState();
     }
   }
 
@@ -353,12 +371,12 @@ export function createThreadRuntimeHelpers({
     turn.items = reconcileOptimisticUserItems(turn.items);
   }
 
-  function appendOptimisticUserMessage(threadId, turnId, text) {
+  function appendOptimisticUserMessage(threadId, turnId, content, text) {
     upsertThreadTurnItem(
       threadId,
       turnId,
       {
-        content: [{ text, type: "text" }],
+        content,
         id: `local-user-${turnId}`,
         type: "userMessage",
       },
@@ -412,6 +430,7 @@ export function createThreadRuntimeHelpers({
     current.text += delta;
     current.updatedAt = Date.now();
     state.pendingAssistantMessages.set(itemId, current);
+    saveRuntimeState();
 
     if (state.selectedThreadId === threadId) {
       const stream = state.streamRenderState.get(itemId) || {
@@ -464,6 +483,7 @@ export function createThreadRuntimeHelpers({
     pending.threadId = threadId;
     pending.turnId = turnId;
     state.pendingLiveItems.set(itemId, pending);
+    saveRuntimeState();
 
     if (state.selectedThreadId === threadId) {
       const stream = state.streamRenderState.get(itemId) || {

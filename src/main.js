@@ -32,14 +32,16 @@ const STORAGE_KEY = "codex-site-settings-v1";
 // UI state is stored separately from settings.
 const UI_STATE_KEY = "codex-site-ui-state-v1";
 const LIVE_ITEM_STORAGE_KEY = "codex-site-live-items-v1";
+const RUNTIME_STATE_KEY = "codex-site-runtime-state-v1";
 // Bump this when forcing the browser to pick up client updates.
-const UI_VERSION = "20260404s";
+const UI_VERSION = "20260404zc";
 
 // Keep version constants grouped near storage keys.
 // Minor note for maintenance.
 // DOM mount point for the app shell.
 // App bootstrap starts here.
 const app = document.querySelector("#app");
+const persistedRuntimeState = loadRuntimeState();
 
 // The shell is rendered from JS so the UI can stay zero-dependency.
 app.innerHTML = `
@@ -98,11 +100,22 @@ app.innerHTML = `
     <section class="screen screen-chat" id="chat-screen">
       <header class="chat-topbar">
         <div class="chat-topbar-left">
-          <button class="ghost-button icon-button back-button" id="back-to-list-button" type="button" aria-label="Back to chats">←</button>
+          <button class="ghost-button icon-button back-button" id="back-to-list-button" type="button" aria-label="Back to chats">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7"></path>
+              <path d="M9 12h10"></path>
+            </svg>
+          </button>
           <span class="chat-topbar-title" id="thread-title">Codex</span>
         </div>
         <div class="chat-topbar-right">
-          <button class="ghost-button icon-button" id="chat-menu-button" type="button" aria-label="Open chat menu">☰</button>
+          <button class="ghost-button icon-button" id="chat-menu-button" type="button" aria-label="Open chat menu">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M7 8h10"></path>
+              <path d="M7 12h10"></path>
+              <path d="M7 16h10"></path>
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -122,6 +135,7 @@ app.innerHTML = `
           </div>
           <div class="chat-menu-item chat-menu-limits" id="chat-header-limits"></div>
           <button class="chat-menu-action" id="chat-settings-button" type="button">Settings</button>
+          <button class="chat-menu-action" id="chat-markdown-demo-button" type="button">Markdown demo</button>
           <button class="chat-menu-action" id="chat-start-codex-button" type="button">Start Codex</button>
           <button class="chat-menu-action" id="chat-stop-codex-button" type="button">Stop Codex</button>
           <button class="chat-menu-action" id="chat-list-button" type="button">Chats</button>
@@ -131,16 +145,28 @@ app.innerHTML = `
       <section class="chat-scroll-wrap">
         <div class="messages" id="messages"></div>
         <button class="scroll-to-bottom hidden" id="scroll-to-bottom-button" type="button" aria-label="Scroll to bottom">
-          ˅
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M8 8.5l4 4 4-4"></path>
+            <path d="M8 13.5l4 4 4-4"></path>
+          </svg>
         </button>
       </section>
 
       <footer class="composer">
         <form class="composer-form" id="composer-form">
-          <textarea id="prompt-input" rows="1" placeholder="Write a prompt for Codex"></textarea>
-          <div class="composer-actions">
-            <span class="hint" id="composer-hint">Shift+Enter for newline</span>
-            <button class="primary-button" id="send-button" type="submit">Send</button>
+          <input id="attachment-input" type="file" multiple accept="image/*,*/*" class="sr-only" />
+          <div class="composer-attachments hidden" id="composer-attachments"></div>
+          <div class="composer-input-row">
+            <button class="ghost-button composer-attach-button" id="attach-button" type="button" aria-label="Attach files">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                <path d="M21.44 11.05l-8.49 8.49a6 6 0 01-8.49-8.49l9.19-9.2a4 4 0 115.66 5.66l-9.2 9.2a2 2 0 11-2.82-2.83l8.49-8.48"></path>
+              </svg>
+            </button>
+            <textarea id="prompt-input" rows="1" placeholder="Write a prompt for Codex"></textarea>
+            <div class="composer-actions">
+              <span class="hint" id="composer-hint">Shift+Enter for newline</span>
+              <button class="primary-button" id="send-button" type="submit">Send</button>
+            </div>
           </div>
         </form>
       </footer>
@@ -166,7 +192,8 @@ app.innerHTML = `
 
           <label class="settings-field">
             <span>Model</span>
-            <input id="setting-model" type="text" placeholder="Leave blank for default" />
+            <select id="setting-model"></select>
+            <small class="settings-help" id="setting-model-help">Loading models…</small>
           </label>
 
           <label class="settings-field">
@@ -265,11 +292,15 @@ const elements = {
   accountEmail: document.querySelector("#account-email"),
   accountLimits: document.querySelector("#account-limits"),
   accountPlan: document.querySelector("#account-plan"),
+  attachButton: document.querySelector("#attach-button"),
+  attachmentInput: document.querySelector("#attachment-input"),
+  composerAttachments: document.querySelector("#composer-attachments"),
   authLink: document.querySelector("#auth-link"),
   backFromSettingsButton: document.querySelector("#back-from-settings-button"),
   backToListButton: document.querySelector("#back-to-list-button"),
   chatHeaderLimits: document.querySelector("#chat-header-limits"),
   chatListButton: document.querySelector("#chat-list-button"),
+  chatMarkdownDemoButton: document.querySelector("#chat-markdown-demo-button"),
   chatMenuButton: document.querySelector("#chat-menu-button"),
   chatMenuPanel: document.querySelector("#chat-menu-panel"),
   chatMenuThreadTitle: document.querySelector("#chat-menu-thread-title"),
@@ -302,6 +333,7 @@ const elements = {
   settingEffort: document.querySelector("#setting-effort"),
   settingFastMode: document.querySelector("#setting-fast-mode"),
   settingModel: document.querySelector("#setting-model"),
+  settingModelHelp: document.querySelector("#setting-model-help"),
   settingPersonality: document.querySelector("#setting-personality"),
   settingPlanMode: document.querySelector("#setting-plan-mode"),
   settingPromptTemplate: document.querySelector("#setting-prompt-template"),
@@ -343,6 +375,80 @@ const {
   syncComposerInteractivity,
 } = uiRenderer;
 
+const MARKDOWN_DEMO_TURN_ID = "local-markdown-demo-turn";
+const MARKDOWN_DEMO_COMMENTARY_ID = "local-markdown-demo-commentary";
+const MARKDOWN_DEMO_FINAL_ID = "local-markdown-demo-final";
+const MARKDOWN_DEMO_COMMENTARY = `
+Показываю тестовый markdown для проверки рендера.
+
+Ниже есть обычный текст, списки и несколько fenced code blocks с разными языками.
+`.trim();
+
+const MARKDOWN_DEMO_FINAL = `
+Ниже набор блоков для визуальной проверки заголовков языка и copy-кнопок.
+
+Обычный текст между кодом тоже должен выглядеть ровно.
+
+1. Блок \`text\`
+2. Блок \`python\`
+3. Блок \`c++\`
+4. Блок \`bash\`
+5. Блок \`json\`
+
+\`\`\`text
+alpha
+beta
+gamma
+delta
+\`\`\`
+
+После текстового блока идет короткий Python-пример.
+
+\`\`\`python
+def fib(limit: int) -> list[int]:
+    values = [0, 1]
+    while values[-1] + values[-2] <= limit:
+        values.append(values[-1] + values[-2])
+    return values
+
+print(fib(34))
+\`\`\`
+
+Теперь C++ со спецсимволами в названии языка.
+
+\`\`\`c++
+#include <iostream>
+#include <vector>
+
+int main() {
+  std::vector<int> values{3, 5, 8};
+  for (int value : values) {
+    std::cout << "value=" << value << std::endl;
+  }
+  return 0;
+}
+\`\`\`
+
+И shell-команда с циклом.
+
+\`\`\`bash
+for i in 1 2 3; do
+  echo "demo-step:$i"
+done
+\`\`\`
+
+Финальный JSON-блок.
+
+\`\`\`json
+{
+  "feature": "markdown-code-block-header",
+  "copyButton": true,
+  "languages": ["text", "python", "c++", "bash", "json"],
+  "status": "demo"
+}
+\`\`\`
+`.trim();
+
 const {
   removeMessageElement,
   renderEmptyMessagesState,
@@ -351,6 +457,7 @@ const {
 } = createMessageRenderer({
   elements,
   escapeHtml,
+  renderRichTextHtml: renderMarkdownHtml,
   toMessageHtml,
   updateScrollButton,
 });
@@ -358,15 +465,17 @@ const {
 const state = {
   account: null,
   activeThreadSyncTimer: null,
-  activeTurnId: null,
+  activeTurnId: persistedRuntimeState.activeTurnId,
   connected: false,
   connecting: false,
-  finalAssistantFallbacks: new Map(),
+  finalAssistantFallbacks: persistedRuntimeState.finalAssistantFallbacks,
   lastError: null,
   liveThreadItems: loadLiveThreadItems(),
-  pendingAssistantMessages: new Map(),
-  pendingLiveItems: new Map(),
+  pendingAssistantMessages: persistedRuntimeState.pendingAssistantMessages,
+  pendingLiveItems: persistedRuntimeState.pendingLiveItems,
   pendingLoginId: null,
+  models: [],
+  queuedPrompts: [],
   rateLimits: null,
   recentItemTypes: [],
   recentMethods: [],
@@ -374,13 +483,14 @@ const state = {
   selectedThread: null,
   selectedThreadId: null,
   settings: loadSettings(),
+  composerAttachments: [],
   streamRenderTimers: new Map(),
   streamRenderState: new Map(),
   curatedSkills: [],
   chatMenuOpen: false,
   skills: [],
   threadLoadRequestIds: new Map(),
-  threadActivities: new Map(),
+  threadActivities: persistedRuntimeState.threadActivities,
   settingsReturnView: "list",
   threads: [],
   view: "list",
@@ -455,6 +565,95 @@ function saveLiveThreadItems() {
   window.localStorage.setItem(LIVE_ITEM_STORAGE_KEY, JSON.stringify(serializable));
 }
 
+function loadRuntimeState() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(RUNTIME_STATE_KEY) || "{}");
+    const toMap = (value, mapper) =>
+      new Map(
+        Object.entries(value || {})
+          .map(([key, entry]) => mapper(key, entry))
+          .filter(Boolean),
+      );
+
+    return {
+      activeTurnId: typeof saved.activeTurnId === "string" && saved.activeTurnId ? saved.activeTurnId : null,
+      finalAssistantFallbacks: toMap(saved.finalAssistantFallbacks, (key, entry) =>
+        entry?.id && entry?.text ? [key, { id: entry.id, text: entry.text }] : null),
+      pendingAssistantMessages: toMap(saved.pendingAssistantMessages, (key, entry) =>
+        entry?.threadId && entry?.turnId
+          ? [key, {
+              text: String(entry.text || ""),
+              threadId: entry.threadId,
+              turnId: entry.turnId,
+              updatedAt: Number(entry.updatedAt) || 0,
+            }]
+          : null),
+      pendingLiveItems: toMap(saved.pendingLiveItems, (key, entry) =>
+        entry?.threadId && entry?.turnId
+          ? [key, {
+              meta: String(entry.meta || ""),
+              pending: Boolean(entry.pending),
+              role: entry.role || "commentary",
+              text: String(entry.text || ""),
+              threadId: entry.threadId,
+              turnId: entry.turnId,
+            }]
+          : null),
+      threadActivities: toMap(saved.threadActivities, (key, value) =>
+        typeof value === "string" && value ? [key, value] : null),
+    };
+  } catch {
+    return {
+      activeTurnId: null,
+      finalAssistantFallbacks: new Map(),
+      pendingAssistantMessages: new Map(),
+      pendingLiveItems: new Map(),
+      threadActivities: new Map(),
+    };
+  }
+}
+
+function saveRuntimeState() {
+  const payload = {
+    activeTurnId: state.activeTurnId || null,
+    finalAssistantFallbacks: Object.fromEntries(state.finalAssistantFallbacks),
+    pendingAssistantMessages: Object.fromEntries(state.pendingAssistantMessages),
+    pendingLiveItems: Object.fromEntries(state.pendingLiveItems),
+    threadActivities: Object.fromEntries(state.threadActivities),
+  };
+
+  const isEmpty =
+    !payload.activeTurnId
+    && !Object.keys(payload.finalAssistantFallbacks).length
+    && !Object.keys(payload.pendingAssistantMessages).length
+    && !Object.keys(payload.pendingLiveItems).length
+    && !Object.keys(payload.threadActivities).length;
+
+  if (isEmpty) {
+    window.localStorage.removeItem(RUNTIME_STATE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(RUNTIME_STATE_KEY, JSON.stringify(payload));
+}
+
+function formatBytes(bytes = 0) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: {
@@ -477,8 +676,269 @@ function escapeHtml(value = "") {
     .replaceAll(">", "&gt;");
 }
 
+function attachmentKindFromMime(mimeType = "") {
+  return String(mimeType || "").startsWith("image/") ? "image" : "file";
+}
+
+function buildAttachmentInputItems(attachments = []) {
+  return attachments.map((attachment) =>
+    attachment.kind === "image"
+      ? {
+          path: attachment.path,
+          type: "localImage",
+        }
+      : {
+          name: attachment.name,
+          path: attachment.path,
+          type: "mention",
+        },
+  );
+}
+
+function buildComposerContent(promptText, attachments = []) {
+  const content = [];
+
+  const normalizedText = String(promptText || "").trim();
+  if (normalizedText) {
+    content.push({
+      text: normalizedText,
+      type: "text",
+    });
+  }
+
+  content.push(...buildAttachmentInputItems(attachments));
+  return content;
+}
+
+function releaseComposerAttachmentPreview(attachment) {
+  if (attachment?.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+function createAttachmentId() {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) {
+    return `${Date.now()}-${uuid}`;
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function clearComposerAttachments({ preserveFailed = false } = {}) {
+  const preserved = [];
+
+  for (const attachment of state.composerAttachments) {
+    if (preserveFailed && attachment.status === "failed") {
+      preserved.push(attachment);
+      continue;
+    }
+
+    releaseComposerAttachmentPreview(attachment);
+  }
+
+  state.composerAttachments = preserved;
+  elements.attachmentInput.value = "";
+}
+
+function renderComposerAttachments() {
+  const attachments = state.composerAttachments;
+  const hasAttachments = attachments.length > 0;
+
+  elements.composerAttachments.classList.toggle("hidden", !hasAttachments);
+  if (!hasAttachments) {
+    elements.composerAttachments.innerHTML = "";
+    syncComposerLayout();
+    return;
+  }
+
+  elements.composerAttachments.innerHTML = attachments
+    .map((attachment) => {
+      const classes = [
+        "attachment-chip",
+        attachment.kind === "image" ? "attachment-chip-image" : "attachment-chip-file",
+        attachment.status === "uploading" ? "attachment-chip-uploading" : "",
+        attachment.status === "failed" ? "attachment-chip-failed" : "",
+      ].filter(Boolean).join(" ");
+
+      const meta = [attachment.status === "uploading" ? "Uploading..." : "", attachment.status === "failed" ? "Upload failed" : "", formatBytes(attachment.size)]
+        .filter(Boolean)
+        .join(" • ");
+
+      if (attachment.kind === "image") {
+        const preview = attachment.previewUrl
+          ? `<img class="attachment-thumb" src="${attachment.previewUrl}" alt="${escapeHtml(attachment.name)}" />`
+          : `<div class="attachment-icon">IMG</div>`;
+
+        const statusBadge = meta
+          ? `<div class="attachment-badge">${escapeHtml(meta)}</div>`
+          : "";
+
+        return `
+          <div class="${classes}">
+            ${preview}
+            ${statusBadge}
+            <button class="attachment-remove" type="button" data-remove-attachment="${attachment.id}" aria-label="Remove attachment">×</button>
+          </div>
+        `;
+      }
+
+      const preview = `<div class="attachment-icon">FILE</div>`;
+
+      return `
+        <div class="${classes}">
+          ${preview}
+          <div class="attachment-copy">
+            <strong>${escapeHtml(attachment.name)}</strong>
+            <small>${escapeHtml(meta || attachment.kind)}</small>
+          </div>
+          <button class="attachment-remove" type="button" data-remove-attachment="${attachment.id}" aria-label="Remove attachment">×</button>
+        </div>
+      `;
+    })
+    .join("");
+
+  syncComposerLayout();
+}
+
 function toMessageHtml(text) {
   return escapeHtml(text).replace(/\n/g, "<br />");
+}
+
+function normalizeCodeFenceLanguage(info = "") {
+  const label = String(info || "").trim().split(/\s+/, 1)[0] || "text";
+  return label;
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (!value) {
+    return false;
+  }
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fall through to the DOM fallback.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+
+  textarea.remove();
+  return copied;
+}
+
+function renderInlineMarkdown(text) {
+  const tokens = [];
+  const stash = (html) => {
+    const token = `__MD_TOKEN_${tokens.length}__`;
+    tokens.push({ html, token });
+    return token;
+  };
+
+  let html = escapeHtml(text || "");
+
+  html = html.replace(/`([^`]+)`/g, (_, code) => stash(`<code>${code}</code>`));
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) =>
+    stash(`<a href="${url}" target="_blank" rel="noreferrer">${label}</a>`),
+  );
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
+
+  for (const { token, html: replacement } of tokens) {
+    html = html.replaceAll(token, replacement);
+  }
+
+  return html;
+}
+
+function renderMarkdownHtml(text) {
+  const source = String(text || "").replaceAll("\r\n", "\n").trim();
+  if (!source) {
+    return "";
+  }
+
+  const fencePattern = /```([^\n`]*)\n([\s\S]*?)```/g;
+  const fenceTokens = [];
+  const withFenceTokens = source.replace(fencePattern, (_, language = "", code = "") => {
+    const token = `\n@@CODE_BLOCK_${fenceTokens.length}@@\n`;
+    const label = normalizeCodeFenceLanguage(language);
+    const escapedCode = escapeHtml(code.replace(/\n$/, ""));
+    fenceTokens.push({
+      token,
+      html: `
+        <div class="message-code message-code-block">
+          <div class="code-block-head">
+            <span class="code-block-language">${escapeHtml(label)}</span>
+            <button class="code-copy-button" type="button" aria-label="Copy code" title="Copy code">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                <rect x="5" y="5" width="10" height="10" rx="2"></rect>
+              </svg>
+            </button>
+          </div>
+          <pre><code data-code-language="${escapeHtml(label)}">${escapedCode}</code></pre>
+        </div>
+      `.trim(),
+    });
+    return token;
+  });
+
+  return withFenceTokens
+    .split(/\n{2,}/)
+    .filter(Boolean)
+    .map((block) => {
+      const trimmedBlock = block.trim();
+      const fenced = fenceTokens.find((entry) => entry.token.trim() === trimmedBlock);
+      if (fenced) {
+        return fenced.html;
+      }
+
+      const lines = trimmedBlock.split("\n");
+
+      if (lines.every((line) => /^>\s?/.test(line))) {
+        const quote = lines.map((line) => line.replace(/^>\s?/, "")).join("<br />");
+        return `<blockquote>${renderInlineMarkdown(quote)}</blockquote>`;
+      }
+
+      if (lines.every((line) => /^[-*]\s+/.test(line))) {
+        return `<ul>${lines
+          .map((line) => `<li>${renderInlineMarkdown(line.replace(/^[-*]\s+/, ""))}</li>`)
+          .join("")}</ul>`;
+      }
+
+      if (lines.every((line) => /^\d+\.\s+/.test(line))) {
+        return `<ol>${lines
+          .map((line) => `<li>${renderInlineMarkdown(line.replace(/^\d+\.\s+/, ""))}</li>`)
+          .join("")}</ol>`;
+      }
+
+      const heading = trimmedBlock.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        const level = heading[1].length;
+        return `<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`;
+      }
+
+      return `<p>${lines.map((line) => renderInlineMarkdown(line)).join("<br />")}</p>`;
+    })
+    .join("");
 }
 
 function getThreadLabel(thread) {
@@ -581,6 +1041,7 @@ const {
   messagesFromThreadItem,
   normalizeMessageText,
   normalizeStatus,
+  saveRuntimeState,
   state,
   textFromAgentItem,
   textFromUserItem,
@@ -617,6 +1078,8 @@ const {
   reconcileOptimisticUserItems,
   removePendingAssistantMessage,
   removePendingLiveItem,
+  saveLiveThreadItems,
+  saveRuntimeState,
   scrollMessagesToBottom,
   setFinalAssistantFallback,
   setThreadActivityFromItem,
@@ -667,6 +1130,7 @@ function clearThreadActivity(threadId) {
     return;
   }
   state.threadActivities.delete(threadId);
+  saveRuntimeState();
 }
 
 function activityTextFromItem(item) {
@@ -738,6 +1202,31 @@ function setThreadActivityFromItem(threadId, item) {
     return;
   }
   state.threadActivities.set(threadId, text);
+  saveRuntimeState();
+}
+
+function inferActiveTurnId(thread) {
+  if (normalizeStatus(thread?.status) !== "active") {
+    return null;
+  }
+
+  const activeTurns = (thread?.turns || []).filter((turn) => turn.status === "inProgress");
+  return activeTurns.length ? activeTurns[activeTurns.length - 1].id : null;
+}
+
+function syncActiveThreadState(thread) {
+  const nextActiveTurnId = inferActiveTurnId(thread);
+
+  if (thread?.id && nextActiveTurnId) {
+    state.activeTurnId = nextActiveTurnId;
+    startActiveThreadSync(thread.id);
+  } else if (state.selectedThreadId === thread?.id || !thread?.id) {
+    state.activeTurnId = null;
+    stopActiveThreadSync();
+  }
+
+  saveRuntimeState();
+  renderComposerState(state);
 }
 
 function formatPlan(planType) {
@@ -848,15 +1337,47 @@ function clearPendingAssistantMessagesForTurn(threadId, turnId, text = "") {
 function removePendingAssistantMessage(itemId) {
   state.pendingAssistantMessages.delete(itemId);
   removeMessageElement(itemId);
+  saveRuntimeState();
 }
 
 function removePendingLiveItem(itemId) {
   state.pendingLiveItems.delete(itemId);
   removeMessageElement(itemId);
+  saveRuntimeState();
 }
 
 function renderSettings() {
-  elements.settingModel.value = state.settings.model;
+  const modelOptions = [
+    `<option value="">Default model</option>`,
+    ...state.models.map((model) => {
+      const value = escapeHtml(model.model || model.id || "");
+      const label = escapeHtml(model.displayName || model.model || model.id || "Unknown model");
+      return `<option value="${value}">${label}</option>`;
+    }),
+  ].join("");
+
+  elements.settingModel.innerHTML = modelOptions;
+  elements.settingModel.value = state.settings.model || "";
+  if (elements.settingModel.value !== (state.settings.model || "")) {
+    elements.settingModel.value = "";
+  }
+
+  const selectedModel = state.models.find((model) => (model.model || model.id) === (elements.settingModel.value || ""));
+  if (!state.models.length) {
+    elements.settingModel.disabled = true;
+    elements.settingModelHelp.textContent = "Model list is unavailable right now.";
+  } else {
+    elements.settingModel.disabled = false;
+    if (!selectedModel) {
+      const defaultModel = state.models.find((model) => model.isDefault);
+      elements.settingModelHelp.textContent = defaultModel
+        ? `Default: ${defaultModel.displayName || defaultModel.model || defaultModel.id}`
+        : "Use the default model for new turns.";
+    } else {
+      elements.settingModelHelp.textContent = selectedModel.description || selectedModel.displayName || selectedModel.model || "";
+    }
+  }
+
   elements.settingPromptTemplate.value = state.settings.promptTemplate;
   elements.settingEffort.value = state.settings.reasoningEffort;
   elements.settingSandbox.value = state.settings.sandbox;
@@ -879,6 +1400,42 @@ function render() {
   renderChatMenu(state);
   renderMessages(autoScrollPinned);
   renderSettings();
+  renderComposerAttachments();
+}
+
+function injectMarkdownDemoTurn() {
+  if (!state.selectedThread) {
+    alert("Open a thread first to insert the markdown demo.");
+    return;
+  }
+
+  const turns = Array.isArray(state.selectedThread.turns) ? state.selectedThread.turns : [];
+  state.selectedThread.turns = [
+    ...turns.filter((turn) => turn.id !== MARKDOWN_DEMO_TURN_ID),
+    {
+      id: MARKDOWN_DEMO_TURN_ID,
+      items: [
+        {
+          id: MARKDOWN_DEMO_COMMENTARY_ID,
+          phase: "commentary",
+          text: MARKDOWN_DEMO_COMMENTARY,
+          type: "agentMessage",
+        },
+        {
+          id: MARKDOWN_DEMO_FINAL_ID,
+          phase: "final",
+          text: MARKDOWN_DEMO_FINAL,
+          type: "agentMessage",
+        },
+      ],
+      status: "completed",
+    },
+  ];
+
+  state.chatMenuOpen = false;
+  autoScrollPinned = true;
+  openView("chat");
+  scrollMessagesToBottom(true);
 }
 
 function openView(view) {
@@ -1006,6 +1563,19 @@ async function loadSkills(forceReload = false) {
   renderSkills(state);
 }
 
+async function loadModels() {
+  try {
+    const response = await rpc("model/list", {});
+    state.models = Array.isArray(response.data)
+      ? response.data.filter((model) => !model.hidden)
+      : [];
+  } catch {
+    state.models = [];
+  }
+
+  renderSettings();
+}
+
 async function loadCuratedSkills() {
   try {
     const response = await api("/api/skills/catalog");
@@ -1038,6 +1608,23 @@ async function loadThreads() {
   }
 
   renderThreads(state);
+}
+
+function threadNeedsSessionReplay(thread) {
+  return Boolean(thread?.path && thread?.source && thread.source !== "cli");
+}
+
+async function loadSessionReplayTurns(thread) {
+  if (!threadNeedsSessionReplay(thread)) {
+    return [];
+  }
+
+  try {
+    const response = await api(`/api/thread/renderable-items?path=${encodeURIComponent(thread.path)}`);
+    return Array.isArray(response.turns) ? response.turns : [];
+  } catch {
+    return [];
+  }
 }
 
 async function loadThread(threadId, includeTurns = true, forceScrollToBottom = true) {
@@ -1082,11 +1669,17 @@ async function loadThread(threadId, includeTurns = true, forceScrollToBottom = t
     return;
   }
 
+  const replayTurns = await loadSessionReplayTurns(response.thread);
+  if (state.threadLoadRequestIds.get(threadId) !== requestId || state.selectedThreadId !== threadId) {
+    return;
+  }
+
   const previousTurns = state.selectedThread?.turns || [];
+  const recoveredTurns = mergeTurns(replayTurns, response.thread.turns || []);
   state.selectedThread = response.thread;
-  state.selectedThread.turns = mergeTurns(previousTurns, response.thread.turns || []);
+  state.selectedThread.turns = mergeTurns(previousTurns, recoveredTurns);
   clearResolvedFinalAssistantFallbacks(state.selectedThread);
-  for (const turn of response.thread.turns || []) {
+  for (const turn of recoveredTurns || []) {
     for (const item of turn.items || []) {
       rememberItemType(item, "read");
     }
@@ -1096,6 +1689,7 @@ async function loadThread(threadId, includeTurns = true, forceScrollToBottom = t
     thread.id === response.thread.id ? { ...thread, ...response.thread } : thread,
   );
   reconcileThreadActivity(state.selectedThread, { clearPending: true });
+  syncActiveThreadState(state.selectedThread);
   openView("chat");
   saveUiState();
   render();
@@ -1117,7 +1711,7 @@ async function ensureResumed(threadId) {
   });
 }
 
-async function createThread(promptText) {
+async function createThread(promptText, attachments = []) {
   const response = await rpc("thread/start", {
     cwd: "/root",
     ...currentThreadOptions(),
@@ -1129,10 +1723,10 @@ async function createThread(promptText) {
   openView("chat");
   saveUiState();
   render();
-  await startTurn(response.thread.id, promptText);
+  await startTurn(response.thread.id, promptText, attachments);
 }
 
-async function startTurn(threadId, promptText) {
+async function startTurn(threadId, promptText, attachments = []) {
   await ensureResumed(threadId);
 
   clearThreadActivity(threadId);
@@ -1144,20 +1738,20 @@ async function startTurn(threadId, promptText) {
     turns: state.selectedThread?.turns || [],
   };
   openView("chat");
-  appendOptimisticUserMessage(threadId, `pending-${Date.now()}`, promptText);
+  const userContent = buildComposerContent(promptText, attachments);
+  appendOptimisticUserMessage(
+    threadId,
+    `pending-${Date.now()}`,
+    userContent,
+    textFromUserItem({ content: userContent }),
+  );
   autoScrollPinned = true;
   renderComposerState(state);
   renderHeader(state);
   renderChatMenu(state);
 
   const response = await rpc("turn/start", {
-    input: [
-      {
-        text: promptText,
-        type: "text",
-      },
-      ...getSelectedSkillInputs(),
-    ],
+    input: [...userContent, ...getSelectedSkillInputs()],
     threadId,
     ...currentTurnOptions(),
   });
@@ -1171,18 +1765,84 @@ async function startTurn(threadId, promptText) {
   const reconciledOptimisticTurn = Array.isArray(state.selectedThread.turns)
     && reconcileOptimisticTurnId(state.selectedThread, response.turn.id);
   if (!reconciledOptimisticTurn) {
-    appendOptimisticUserMessage(threadId, response.turn.id, promptText);
+    appendOptimisticUserMessage(
+      threadId,
+      response.turn.id,
+      userContent,
+      textFromUserItem({ content: userContent }),
+    );
   }
   openView("chat");
   render();
   state.activeTurnId = response.turn.id;
   autoScrollPinned = true;
   renderComposerState(state);
+  saveRuntimeState();
   startActiveThreadSync(threadId);
 }
 
+async function interruptActiveTurn() {
+  if (!state.selectedThreadId || !state.activeTurnId) {
+    return;
+  }
+
+  await rpc("turn/interrupt", {
+    threadId: state.selectedThreadId,
+    turnId: state.activeTurnId,
+  });
+}
+
 async function sendPrompt(promptText) {
-  if (!promptText.trim()) {
+  const normalizedPrompt = promptText.trim();
+  const attachments = state.composerAttachments.filter((attachment) => attachment.status === "uploaded");
+  const hasUploadingAttachments = state.composerAttachments.some((attachment) => attachment.status === "uploading");
+  const hasFailedAttachments = state.composerAttachments.some((attachment) => attachment.status === "failed");
+  const hasComposerInput = Boolean(normalizedPrompt || attachments.length);
+
+  if (state.activeTurnId) {
+    if (!hasComposerInput) {
+      try {
+        await interruptActiveTurn();
+      } catch (error) {
+        console.error(error);
+        alert(`Stop failed: ${error.message}`);
+      }
+      return;
+    }
+
+    if (hasUploadingAttachments) {
+      alert("Wait for attachment uploads to finish.");
+      return;
+    }
+    if (hasFailedAttachments) {
+      alert("Remove failed attachments or attach them again.");
+      return;
+    }
+
+    state.queuedPrompts.push({
+      attachments,
+      promptText: normalizedPrompt,
+      threadId: state.selectedThreadId,
+    });
+    elements.promptInput.value = "";
+    clearComposerAttachments();
+    renderComposerAttachments();
+    autoSizeTextarea();
+    renderComposerState(state);
+    return;
+  }
+
+  if (!hasComposerInput) {
+    return;
+  }
+
+  if (hasUploadingAttachments) {
+    alert("Wait for attachment uploads to finish.");
+    return;
+  }
+
+  if (hasFailedAttachments) {
+    alert("Remove failed attachments or attach them again.");
     return;
   }
 
@@ -1195,12 +1855,14 @@ async function sendPrompt(promptText) {
 
   try {
     if (!state.selectedThreadId) {
-      await createThread(promptText);
+      await createThread(normalizedPrompt, attachments);
     } else {
-      await startTurn(state.selectedThreadId, promptText);
+      await startTurn(state.selectedThreadId, normalizedPrompt, attachments);
     }
 
     elements.promptInput.value = "";
+    clearComposerAttachments();
+    renderComposerAttachments();
     autoSizeTextarea();
   } catch (error) {
     console.error(error);
@@ -1217,6 +1879,112 @@ function autoSizeTextarea() {
   if (autoScrollPinned) {
     scrollMessagesToBottom(true);
   }
+}
+
+async function fileToBase64(file) {
+  if (typeof file.arrayBuffer === "function") {
+    const buffer = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      const chunk = bytes.subarray(index, index + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+
+    return btoa(binary);
+  }
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Failed to read attachment"));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
+
+  const [, base64 = ""] = dataUrl.split(",", 2);
+  return base64;
+}
+
+async function uploadComposerFiles(fileList) {
+  try {
+    const files = [...fileList];
+    if (!files.length) {
+      return;
+    }
+
+    const pendingAttachments = files.map((file) => ({
+      id: createAttachmentId(),
+      kind: attachmentKindFromMime(file.type),
+      mimeType: file.type || "application/octet-stream",
+      name: file.name,
+      path: "",
+      previewUrl: file.type.startsWith("image/") ? URL.createObjectURL(file) : "",
+      size: file.size,
+      status: "uploading",
+    }));
+
+    state.composerAttachments.push(...pendingAttachments);
+    renderComposerAttachments();
+    renderComposerState(state);
+
+    const payloadFiles = await Promise.all(files.map(async (file) => ({
+      dataBase64: await fileToBase64(file),
+      mimeType: file.type || "application/octet-stream",
+      name: file.name,
+    })));
+
+    const response = await api("/api/attachments", {
+      body: JSON.stringify({ files: payloadFiles }),
+      method: "POST",
+    });
+
+    pendingAttachments.forEach((attachment, index) => {
+      const stored = response.files?.[index];
+      if (!stored?.path) {
+        attachment.status = "failed";
+        return;
+      }
+
+      attachment.path = stored.path;
+      attachment.status = "uploaded";
+    });
+  } catch (error) {
+    pendingAttachments.forEach((attachment) => {
+      attachment.status = "failed";
+      attachment.error = error.message;
+    });
+    alert(`Attachment upload failed: ${error.message}`);
+  } finally {
+    renderComposerAttachments();
+    renderComposerState(state);
+  }
+}
+
+let lastAttachmentSelectionKey = "";
+
+async function handleAttachmentSelection(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) {
+    return;
+  }
+
+  const selectionKey = files
+    .map((file) => `${file.name}:${file.size}:${file.lastModified}`)
+    .join("|");
+
+  if (selectionKey && selectionKey === lastAttachmentSelectionKey) {
+    return;
+  }
+
+  lastAttachmentSelectionKey = selectionKey;
+  await uploadComposerFiles(files);
+  window.setTimeout(() => {
+    if (lastAttachmentSelectionKey === selectionKey) {
+      lastAttachmentSelectionKey = "";
+    }
+  }, 250);
 }
 
 async function handleNotification(payload) {
@@ -1237,6 +2005,7 @@ async function handleNotification(payload) {
     if (state.selectedThreadId === params.threadId && state.selectedThread) {
       state.selectedThread = { ...state.selectedThread, status: params.status };
       reconcileThreadActivity(state.selectedThread);
+      syncActiveThreadState(state.selectedThread);
     }
 
     renderThreads(state);
@@ -1420,6 +2189,7 @@ async function handleNotification(payload) {
     state.activeTurnId = null;
     clearThreadActivity(params.threadId);
     stopActiveThreadSync();
+    saveRuntimeState();
     renderComposerState(state);
     if (params.threadId === state.selectedThreadId) {
       const completedTurnId = params.turn?.id || params.turnId;
@@ -1440,6 +2210,14 @@ async function handleNotification(payload) {
       window.setTimeout(() => elements.promptInput.focus(), 0);
 
       await loadThread(params.threadId, true, false).catch(() => {});
+
+      const nextQueuedIndex = state.queuedPrompts.findIndex((entry) => entry.threadId === params.threadId);
+      if (nextQueuedIndex >= 0) {
+        const [nextQueued] = state.queuedPrompts.splice(nextQueuedIndex, 1);
+        renderComposerState(state);
+        await startTurn(params.threadId, nextQueued.promptText, nextQueued.attachments || []);
+        return;
+      }
 
       window.setTimeout(() => {
         loadThread(params.threadId, true, false).catch(() => {});
@@ -1575,6 +2353,7 @@ const transport = createCodexTransport({
   onOpen: async () => {
     await initializeConnection();
     await loadAccountState();
+    await loadModels();
     await loadThreads();
     await loadSkills(false);
     await loadCuratedSkills();
@@ -1636,6 +2415,7 @@ elements.newChatButton.addEventListener("click", () => {
   state.selectedThread = null;
   state.selectedThreadId = null;
   state.pendingAssistantMessages.clear();
+  saveRuntimeState();
   openView("chat");
   saveUiState();
   render();
@@ -1669,6 +2449,10 @@ elements.openSettingsButton.addEventListener("click", () => {
 
 elements.chatSettingsButton.addEventListener("click", () => {
   openSettingsView("chat");
+});
+
+elements.chatMarkdownDemoButton.addEventListener("click", () => {
+  injectMarkdownDemoTurn();
 });
 
 elements.chatListButton.addEventListener("click", () => {
@@ -1755,6 +2539,24 @@ elements.settingsForm.addEventListener("submit", (event) => {
   closeSettingsView();
 });
 
+elements.settingModel.addEventListener("change", () => {
+  const selectedModel = state.models.find((model) => (model.model || model.id) === elements.settingModel.value);
+  if (!state.models.length) {
+    elements.settingModelHelp.textContent = "Model list is unavailable right now.";
+    return;
+  }
+
+  if (!selectedModel) {
+    const defaultModel = state.models.find((model) => model.isDefault);
+    elements.settingModelHelp.textContent = defaultModel
+      ? `Default: ${defaultModel.displayName || defaultModel.model || defaultModel.id}`
+      : "Use the default model for new turns.";
+    return;
+  }
+
+  elements.settingModelHelp.textContent = selectedModel.description || selectedModel.displayName || selectedModel.model || "";
+});
+
 elements.reloadSkillsButton.addEventListener("click", async () => {
   try {
     await loadSkills(true);
@@ -1819,6 +2621,48 @@ elements.skillsCatalog.addEventListener("click", async (event) => {
   await elements.installSkillButton.click();
 });
 
+elements.attachButton.addEventListener("click", () => {
+  elements.attachmentInput.click();
+});
+
+elements.attachmentInput.addEventListener("change", async (event) => {
+  const files = [...(event.target.files || [])];
+  if (!files.length) {
+    return;
+  }
+
+  elements.attachmentInput.value = "";
+  await handleAttachmentSelection(files);
+});
+
+elements.attachmentInput.addEventListener("input", async (event) => {
+  const files = [...(event.target.files || [])];
+  if (!files.length) {
+    return;
+  }
+
+  elements.attachmentInput.value = "";
+  await handleAttachmentSelection(files);
+});
+
+elements.composerAttachments.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-attachment]");
+  if (!button) {
+    return;
+  }
+
+  const attachmentId = button.dataset.removeAttachment;
+  const attachment = state.composerAttachments.find((entry) => entry.id === attachmentId);
+  if (!attachment) {
+    return;
+  }
+
+  releaseComposerAttachmentPreview(attachment);
+  state.composerAttachments = state.composerAttachments.filter((entry) => entry.id !== attachmentId);
+  renderComposerAttachments();
+  renderComposerState(state);
+});
+
 elements.promptInput.addEventListener("input", autoSizeTextarea);
 
 elements.promptInput.addEventListener("input", () => {
@@ -1841,6 +2685,38 @@ elements.messages.addEventListener("scroll", () => {
   const distance = elements.messages.scrollHeight - elements.messages.scrollTop - elements.messages.clientHeight;
   autoScrollPinned = distance < 40;
   updateScrollButton();
+});
+
+elements.messages.addEventListener("click", async (event) => {
+  const button = event.target.closest(".code-copy-button");
+  if (!button) {
+    return;
+  }
+
+  const codeElement = button.closest(".message-code-block")?.querySelector("code");
+  const code = codeElement?.textContent || "";
+  const copied = await copyTextToClipboard(code);
+  if (!copied) {
+    return;
+  }
+
+  const previousTimerId = Number(button.dataset.resetTimerId || 0);
+  if (previousTimerId) {
+    window.clearTimeout(previousTimerId);
+  }
+
+  button.classList.add("is-copied");
+  button.setAttribute("aria-label", "Copied");
+  button.setAttribute("title", "Copied");
+
+  const timerId = window.setTimeout(() => {
+    button.classList.remove("is-copied");
+    button.setAttribute("aria-label", "Copy code");
+    button.setAttribute("title", "Copy code");
+    delete button.dataset.resetTimerId;
+  }, 1200);
+
+  button.dataset.resetTimerId = String(timerId);
 });
 
 elements.scrollToBottomButton.addEventListener("click", () => {

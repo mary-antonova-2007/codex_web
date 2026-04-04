@@ -8,6 +8,41 @@ export function createUiRenderer({
   getThreadSubtitle,
   normalizeStatus,
 }) {
+  function renderComposerButtonContent(mode) {
+    if (mode === "stop") {
+      return `
+        <span class="button-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <rect x="7" y="7" width="10" height="10" rx="2"></rect>
+          </svg>
+        </span>
+      `;
+    }
+
+    if (mode === "queue") {
+      return `
+        <span class="button-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M5 12h9"></path>
+            <path d="M11 8l4 4-4 4"></path>
+            <path d="M15 6h4v4"></path>
+          </svg>
+        </span>
+        <span class="button-label">Queue</span>
+      `;
+    }
+
+    return `
+      <span class="button-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <path d="M5 12h10"></path>
+          <path d="M11 6l6 6-6 6"></path>
+        </svg>
+      </span>
+      <span class="button-label">Send</span>
+    `;
+  }
+
   function renderScreens(state) {
     elements.listScreen.classList.toggle("active", state.view === "list");
     elements.chatScreen.classList.toggle("active", state.view === "chat");
@@ -16,6 +51,7 @@ export function createUiRenderer({
 
   function syncComposerInteractivity(state) {
     const disabled = !state.connected;
+    elements.attachButton.disabled = disabled;
     elements.sendButton.disabled = disabled;
     elements.promptInput.disabled = disabled;
   }
@@ -23,9 +59,30 @@ export function createUiRenderer({
   function renderComposerState(state) {
     syncComposerInteractivity(state);
     const isBusy = Boolean(state.activeTurnId);
-    const isEmpty = !elements.promptInput.value.trim();
-    elements.sendButton.classList.toggle("button-spinner", isBusy && isEmpty);
-    elements.sendButton.innerHTML = isBusy && isEmpty ? `<span class="spinner"></span>` : "Send";
+    const attachmentCount = Array.isArray(state.composerAttachments) ? state.composerAttachments.length : 0;
+    const isEmpty = !elements.promptInput.value.trim() && attachmentCount === 0;
+    const queuedCount = Array.isArray(state.queuedPrompts) ? state.queuedPrompts.length : 0;
+    const mode = isBusy && isEmpty ? "stop" : isBusy ? "queue" : "send";
+
+    elements.sendButton.classList.toggle("button-stop", mode === "stop");
+    elements.sendButton.classList.toggle("button-queue", mode === "queue");
+    elements.sendButton.classList.remove("button-spinner");
+    elements.sendButton.innerHTML = renderComposerButtonContent(mode);
+    elements.sendButton.setAttribute(
+      "aria-label",
+      mode === "stop" ? "Stop current turn" : mode === "queue" ? "Queue next prompt" : "Send prompt",
+    );
+    elements.composerHint.textContent = !state.connected
+      ? "Wait for Codex connection"
+      : mode === "stop"
+        ? queuedCount
+          ? `Stop current turn • ${queuedCount} queued`
+          : "Stop current turn"
+        : mode === "queue"
+          ? queuedCount
+            ? `${queuedCount} queued`
+            : "Send queues the next turn"
+          : "Shift+Enter for newline";
   }
 
   function renderConnection(state) {
@@ -38,11 +95,9 @@ export function createUiRenderer({
     elements.connectionStatus.classList.toggle("pill-online", state.connected);
 
     const disabled = !state.connected;
+    elements.attachButton.disabled = disabled;
     elements.sendButton.disabled = disabled;
     elements.promptInput.disabled = disabled;
-    elements.composerHint.textContent = disabled
-      ? "Wait for Codex connection"
-      : "Shift+Enter for newline";
     renderComposerState(state);
   }
 
@@ -129,7 +184,21 @@ export function createUiRenderer({
 
   function renderChatMenu(state) {
     elements.chatMenuPanel.classList.toggle("hidden", !state.chatMenuOpen || state.view !== "chat");
-    elements.chatMenuButton.textContent = state.chatMenuOpen ? "×" : "☰";
+    elements.chatMenuButton.setAttribute("aria-label", state.chatMenuOpen ? "Close chat menu" : "Open chat menu");
+    elements.chatMenuButton.innerHTML = state.chatMenuOpen
+      ? `
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path d="M8 8l8 8"></path>
+          <path d="M16 8l-8 8"></path>
+        </svg>
+      `
+      : `
+        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path d="M7 8h10"></path>
+          <path d="M7 12h10"></path>
+          <path d="M7 16h10"></path>
+        </svg>
+      `;
   }
 
   function renderSkills(state) {

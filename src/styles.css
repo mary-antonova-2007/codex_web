@@ -212,6 +212,10 @@ button {
 .primary-button {
   background: var(--accent);
   color: #f4f8f5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .primary-button:disabled {
@@ -222,6 +226,38 @@ button {
 .button-spinner {
   display: inline-grid;
   place-items: center;
+}
+
+.button-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.button-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.button-stop {
+  background: #163a31;
+}
+
+.button-stop .button-icon svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.button-queue {
+  background: #27584b;
 }
 
 .ghost-button {
@@ -264,6 +300,13 @@ button {
 .settings-field select {
   padding: 14px 16px;
   border-radius: 18px;
+}
+
+.settings-help {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .search-field input:focus,
@@ -400,14 +443,25 @@ button {
 }
 
 .icon-button {
-  width: 42px;
-  min-width: 42px;
-  height: 42px;
+  width: 54px;
+  min-width: 54px;
+  height: 54px;
   padding: 0;
   display: grid;
   place-items: center;
-  font-size: 18px;
-  line-height: 1;
+  border: 0;
+  background: var(--accent);
+  color: #f4f8f5;
+}
+
+.icon-button svg {
+  width: 24px;
+  height: 24px;
+  stroke: currentColor;
+  stroke-width: 2.15;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-menu-panel {
@@ -566,6 +620,83 @@ button {
   overscroll-behavior: contain;
 }
 
+.message-code-block {
+  display: grid;
+  gap: 10px;
+  padding: 8px;
+  white-space: normal;
+}
+
+.code-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(24, 26, 22, 0.04);
+}
+
+.code-block-language {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.code-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(24, 26, 22, 0.1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.code-copy-button:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(32, 78, 67, 0.18);
+  color: var(--accent);
+}
+
+.code-copy-button:active {
+  transform: translateY(1px);
+}
+
+.code-copy-button.is-copied {
+  border-color: rgba(32, 78, 67, 0.28);
+  background: rgba(32, 78, 67, 0.1);
+  color: var(--accent);
+}
+
+.code-copy-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.message-code-block pre,
+.message-code-block code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.message-code-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .message-terminal {
   display: grid;
   gap: 8px;
@@ -646,6 +777,152 @@ button {
   opacity: 0.88;
 }
 
+.message-assistant .message-body,
+.message-commentary .message-body {
+  line-height: 1.62;
+}
+
+.message-body > :first-child {
+  margin-top: 0;
+}
+
+.message-body > :last-child {
+  margin-bottom: 0;
+}
+
+.message-body p,
+.message-body ul,
+.message-body ol,
+.message-body blockquote,
+.message-body pre,
+.message-body h1,
+.message-body h2,
+.message-body h3 {
+  margin: 0 0 12px;
+}
+
+.message-body h1,
+.message-body h2,
+.message-body h3 {
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.message-body h1 {
+  font-size: 1.2rem;
+}
+
+.message-body h2 {
+  font-size: 1.08rem;
+}
+
+.message-body h3 {
+  font-size: 0.98rem;
+}
+
+.message-body ul,
+.message-body ol {
+  padding-left: 20px;
+}
+
+.message-body li + li {
+  margin-top: 6px;
+}
+
+.message-body a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(32, 78, 67, 0.24);
+}
+
+.message-body a:hover {
+  border-bottom-color: currentColor;
+}
+
+.message-body blockquote {
+  padding: 10px 14px;
+  border-left: 3px solid rgba(32, 78, 67, 0.35);
+  background: rgba(32, 78, 67, 0.05);
+  border-radius: 0 14px 14px 0;
+  color: var(--muted);
+}
+
+.message-body code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.92em;
+  padding: 0.18em 0.42em;
+  border-radius: 8px;
+  background: rgba(24, 26, 22, 0.07);
+}
+
+.message-body pre {
+  overflow: auto;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #152019;
+  color: #edf5ef;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.message-body pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.user-attachments-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.user-attachment-thumb-link {
+  width: 68px;
+  height: 68px;
+  border-radius: 14px;
+  overflow: hidden;
+  display: block;
+  border: 1px solid rgba(24, 26, 22, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.user-attachment-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.user-attachment-file {
+  max-width: min(100%, 260px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(24, 26, 22, 0.08);
+  color: inherit;
+  text-decoration: none;
+}
+
+.user-attachment-file-icon {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.user-attachment-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thinking-row {
   display: inline-flex;
   align-items: center;
@@ -672,13 +949,24 @@ button {
   position: absolute;
   right: 18px;
   bottom: calc(var(--composer-offset) + 12px);
-  min-width: 44px;
-  min-height: 44px;
+  width: 54px;
+  height: 54px;
   padding: 0;
-  background: rgba(32, 78, 67, 0.9);
-  color: #f7fbf8;
-  box-shadow: var(--shadow);
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #f4f8f5;
   z-index: 3;
+}
+
+.scroll-to-bottom svg {
+  width: 26px;
+  height: 26px;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .scroll-to-bottom:hover {
@@ -705,6 +993,160 @@ button {
   box-shadow: 0 10px 24px rgba(24, 26, 22, 0.05);
   padding: 12px;
   min-width: 0;
+}
+
+.composer-input-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.composer-attach-button {
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+}
+
+.composer-attach-button svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.attachment-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: min(100%, 360px);
+  padding: 8px 10px 8px 8px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--line);
+}
+
+.attachment-chip-image {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.attachment-chip-uploading {
+  opacity: 0.8;
+}
+
+.attachment-chip-failed {
+  border-color: rgba(194, 102, 128, 0.35);
+  background: rgba(194, 102, 128, 0.08);
+}
+
+.attachment-thumb,
+.attachment-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  flex: 0 0 auto;
+}
+
+.attachment-thumb {
+  object-fit: cover;
+  background: rgba(24, 26, 22, 0.08);
+}
+
+.attachment-icon {
+  display: grid;
+  place-items: center;
+  background: rgba(32, 78, 67, 0.08);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.attachment-chip-image .attachment-thumb,
+.attachment-chip-image .attachment-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.attachment-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.attachment-copy strong,
+.attachment-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-copy small {
+  color: var(--muted);
+}
+
+.attachment-remove {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(24, 26, 22, 0.06);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.attachment-chip-image .attachment-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  background: rgba(24, 26, 22, 0.66);
+  color: #fff;
+  font-size: 13px;
+}
+
+.attachment-badge {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(24, 26, 22, 0.66);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .composer textarea {
@@ -1093,11 +1535,61 @@ button {
 
   .composer-form {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: end;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "attachments"
+      "input";
     gap: 8px;
+    position: relative;
     border-radius: 18px;
-    padding: 6px 8px;
+    padding: 6px 8px 6px 8px;
+  }
+
+  .composer-attachments {
+    grid-area: attachments;
+    gap: 6px;
+    margin-bottom: 0;
+  }
+
+  .composer-input-row {
+    grid-area: input;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+    align-items: end;
+    padding-right: 64px;
+  }
+
+  .composer-attach-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    border-radius: 14px;
+  }
+
+  .composer-attachments {
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .attachment-chip {
+    max-width: 100%;
+    border-radius: 16px;
+  }
+
+  .attachment-chip-image {
+    width: calc((100% - 30px) / 6);
+    min-width: 44px;
+    max-width: 56px;
+    aspect-ratio: 1 / 1;
+    height: auto;
+    border-radius: 14px;
+  }
+
+  .attachment-thumb,
+  .attachment-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
   }
 
   .composer textarea {
@@ -1109,9 +1601,12 @@ button {
   }
 
   .composer-actions {
+    position: absolute;
+    right: 8px;
+    bottom: 6px;
     margin-top: 0;
     flex: 0 0 auto;
-    align-items: stretch;
+    align-items: center;
     justify-content: flex-end;
     gap: 0;
   }
@@ -1123,10 +1618,14 @@ button {
     border-radius: 14px;
   }
 
+  .composer .primary-button .button-label {
+    display: none;
+  }
+
   .icon-button {
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
+    width: 54px;
+    min-width: 54px;
+    height: 54px;
   }
 
   .hint {
