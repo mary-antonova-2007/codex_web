@@ -184,15 +184,32 @@ function parseCommandCallOutput(output = "") {
   const command = normalizedOutput.match(/^Command:\s+([^\n]+)$/m)?.[1] || "";
   const sessionId = normalizedOutput.match(/Process running with session ID (\d+)/)?.[1] || null;
   const didExit = /Process exited with code -?\d+/.test(normalizedOutput);
+  const didFail = /^exec_command failed/m.test(normalizedOutput);
   const marker = "\nOutput:\n";
   const markerIndex = normalizedOutput.indexOf(marker);
 
   return {
-    aggregatedOutput: markerIndex >= 0 ? normalizedOutput.slice(markerIndex + marker.length) : "",
+    aggregatedOutput: markerIndex >= 0
+      ? normalizedOutput.slice(markerIndex + marker.length)
+      : didFail
+        ? normalizedOutput
+        : "",
     command,
     sessionId,
-    status: didExit ? "completed" : sessionId ? "running" : "",
+    status: didExit ? "completed" : sessionId ? "running" : didFail ? "failed" : normalizedOutput.trim() ? "completed" : "",
   };
+}
+
+function textFromResponseMessageContent(content = []) {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((item) => (item?.type === "output_text" || item?.type === "text" || item?.type === "input_text") ? String(item.text || "") : "")
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 function parseApplyPatchInput(input = "") {
@@ -292,6 +309,8 @@ function buildRenderableTurnsFromSession(rawSession = "") {
     let turn = turns.get(turnId);
     if (!turn) {
       turn = {
+        _assistantSignatures: new Set(),
+        _commandsByCallId: new Map(),
         _commandsBySessionId: new Map(),
         id: turnId,
         items: [],
@@ -301,6 +320,64 @@ function buildRenderableTurnsFromSession(rawSession = "") {
     }
 
     return turn;
+  }
+
+  function pushAssistantMessage(turn, turnId, phase, text, prefix = "session-agent") {
+    const normalizedText = normalizeNewlines(text).trim();
+    if (!turn || !normalizedText) {
+      return;
+    }
+
+    const signature = `${phase || "unknown"}::${normalizedText}`;
+    if (turn._assistantSignatures.has(signature)) {
+      return;
+    }
+
+    turn._assistantSignatures.add(signature);
+    turn.items.push({
+      id: nextId(prefix, turnId),
+      phase,
+      text: normalizedText,
+      type: "agentMessage",
+    });
+  }
+
+  function ensureCommandItem(turn, turnId, toolCall, callId) {
+    if (!turn || !toolCall || (toolCall.name !== "exec_command" && toolCall.name !== "write_stdin")) {
+      return null;
+    }
+
+    const declaredSessionId = toolCall.name === "write_stdin"
+      ? String(toolCall.arguments?.session_id || "")
+      : "";
+    const commandId = declaredSessionId
+      ? `session-command-${declaredSessionId}`
+      : `session-command-${callId}`;
+    let commandItem = declaredSessionId ? turn._commandsBySessionId.get(declaredSessionId) : null;
+
+    if (!commandItem && turn._commandsByCallId.has(callId)) {
+      commandItem = turn._commandsByCallId.get(callId);
+    }
+
+    if (!commandItem) {
+      commandItem = {
+        aggregatedOutput: "",
+        command: String(toolCall.arguments?.cmd || ""),
+        commandActions: [],
+        cwd: "/root",
+        id: commandId,
+        status: "inProgress",
+        type: "commandExecution",
+      };
+      turn.items.push(commandItem);
+    }
+
+    commandItem.command = commandItem.command || String(toolCall.arguments?.cmd || "");
+    turn._commandsByCallId.set(callId, commandItem);
+    if (declaredSessionId) {
+      turn._commandsBySessionId.set(declaredSessionId, commandItem);
+    }
+    return commandItem;
   }
 
   for (const line of rawSession.split("\n")) {
@@ -354,12 +431,7 @@ function buildRenderableTurnsFromSession(rawSession = "") {
       }
 
       if (payload.type === "agent_message" && payload.message) {
-        turn.items.push({
-          id: nextId("session-agent", currentTurnId),
-          phase: payload.phase,
-          text: String(payload.message),
-          type: "agentMessage",
-        });
+        pushAssistantMessage(turn, currentTurnId, payload.phase, String(payload.message));
       }
       continue;
     }
@@ -375,12 +447,20 @@ function buildRenderableTurnsFromSession(rawSession = "") {
     }
 
     const payload = entry.payload || {};
+    if (payload.type === "message" && payload.role === "assistant" && currentTurnId) {
+      const turn = ensureTurn(currentTurnId);
+      pushAssistantMessage(turn, currentTurnId, payload.phase, textFromResponseMessageContent(payload.content), "session-agent-response");
+      continue;
+    }
+
     if (payload.type === "function_call" && payload.call_id) {
-      pendingToolCalls.set(payload.call_id, {
+      const toolCall = {
         arguments: safeJsonParse(payload.arguments, {}),
         name: payload.name || "",
         turnId: currentTurnId,
-      });
+      };
+      pendingToolCalls.set(payload.call_id, toolCall);
+      ensureCommandItem(ensureTurn(currentTurnId), currentTurnId, toolCall, payload.call_id);
       continue;
     }
 
@@ -401,28 +481,19 @@ function buildRenderableTurnsFromSession(rawSession = "") {
           ? String(toolCall.arguments?.session_id || "")
           : "";
         const sessionId = parsedOutput.sessionId || declaredSessionId || null;
-        const commandId = sessionId ? `session-command-${sessionId}` : `session-command-${payload.call_id}`;
-        let commandItem = sessionId ? turn._commandsBySessionId.get(sessionId) : null;
-
+        const commandItem = ensureCommandItem(turn, toolCall.turnId, toolCall, payload.call_id);
         if (!commandItem) {
-          commandItem = {
-            aggregatedOutput: "",
-            command: parsedOutput.command || String(toolCall.arguments?.cmd || ""),
-            commandActions: [],
-            cwd: "/root",
-            id: commandId,
-            status: parsedOutput.status || "completed",
-            type: "commandExecution",
-          };
-          turn.items.push(commandItem);
-          if (sessionId) {
-            turn._commandsBySessionId.set(sessionId, commandItem);
-          }
+          continue;
         }
 
         commandItem.command = commandItem.command || parsedOutput.command || String(toolCall.arguments?.cmd || "");
-        commandItem.aggregatedOutput = `${commandItem.aggregatedOutput || ""}${parsedOutput.aggregatedOutput || ""}`;
+        commandItem.aggregatedOutput = parsedOutput.aggregatedOutput
+          ? `${commandItem.aggregatedOutput || ""}${parsedOutput.aggregatedOutput}`
+          : commandItem.aggregatedOutput || "";
         commandItem.status = parsedOutput.status || commandItem.status || "completed";
+        if (sessionId) {
+          turn._commandsBySessionId.set(sessionId, commandItem);
+        }
       }
       continue;
     }

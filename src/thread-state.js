@@ -492,15 +492,11 @@ export function createThreadStateHelpers({
       });
     }
 
-    const hasPendingForThread = Array.from(state.pendingAssistantMessages.values()).some(
-      (pending) => pending.threadId === thread?.id,
-    );
-
-    const hasPendingLiveForThread = Array.from(state.pendingLiveItems.values()).some(
-      (pending) => pending.threadId === thread?.id,
-    );
-
-    if (state.activeTurnId && threadIsActive && state.selectedThreadId === thread?.id && !hasPendingForThread && !hasPendingLiveForThread) {
+    if (
+      state.activeTurnId
+      && threadIsActive
+      && state.selectedThreadId === thread?.id
+    ) {
       output.push({
         id: `thinking-${state.activeTurnId}`,
         meta: "Codex",

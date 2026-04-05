@@ -34,7 +34,7 @@ const UI_STATE_KEY = "codex-site-ui-state-v1";
 const LIVE_ITEM_STORAGE_KEY = "codex-site-live-items-v1";
 const RUNTIME_STATE_KEY = "codex-site-runtime-state-v1";
 // Bump this when forcing the browser to pick up client updates.
-const UI_VERSION = "20260404zc";
+const UI_VERSION = "20260405ab";
 
 // Keep version constants grouped near storage keys.
 // Minor note for maintenance.
@@ -496,6 +496,9 @@ const state = {
   view: "list",
 };
 
+const missingFinalRecoveryTimers = new Map();
+const liveResumedThreadIds = new Set();
+const liveResumeRequests = new Map();
 let autoScrollPinned = true;
 
 function loadSettings() {
@@ -1143,6 +1146,18 @@ function activityTextFromItem(item) {
   }
 
   if (item.type === "commandExecution") {
+    if (item.status === "failed") {
+      return item.command
+        ? `Command failed: ${truncateInlineText(item.command, 80)}`
+        : "Command failed";
+    }
+
+    if (item.status === "completed") {
+      return item.command
+        ? `Command finished: ${truncateInlineText(item.command, 80)}`
+        : "Command finished";
+    }
+
     return item.command
       ? `Running: ${truncateInlineText(item.command, 88)}`
       : "Running command";
@@ -1205,6 +1220,103 @@ function setThreadActivityFromItem(threadId, item) {
   saveRuntimeState();
 }
 
+function inferThreadActivityFromState(thread) {
+  if (!thread?.id || normalizeStatus(thread.status) !== "active") {
+    return "";
+  }
+
+  const activeTurnId = inferActiveTurnId(thread);
+  const liveEntries = getLiveThreadEntries(thread.id).filter((entry) =>
+    !activeTurnId || !entry.turnId || entry.turnId === activeTurnId,
+  );
+
+  for (let index = liveEntries.length - 1; index >= 0; index -= 1) {
+    const text = activityTextFromItem(liveEntries[index]?.item);
+    if (text) {
+      return text;
+    }
+  }
+
+  const activeTurn = activeTurnId
+    ? thread.turns?.find((turn) => turn.id === activeTurnId)
+    : null;
+  const candidateItems = activeTurn?.items || [];
+  for (let index = candidateItems.length - 1; index >= 0; index -= 1) {
+    const text = activityTextFromItem(candidateItems[index]);
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function backfillThreadActivity(thread) {
+  if (!thread?.id || normalizeStatus(thread.status) !== "active") {
+    return;
+  }
+
+  const text = inferThreadActivityFromState(thread);
+  if (!text) {
+    return;
+  }
+
+  state.threadActivities.set(thread.id, text);
+  saveRuntimeState();
+}
+
+function missingFinalRecoveryKey(threadId, turnId) {
+  return `${threadId}:${turnId}`;
+}
+
+function clearMissingFinalRecovery(threadId, turnId) {
+  const key = missingFinalRecoveryKey(threadId, turnId);
+  const timerId = missingFinalRecoveryTimers.get(key);
+  if (!timerId) {
+    return;
+  }
+
+  window.clearTimeout(timerId);
+  missingFinalRecoveryTimers.delete(key);
+}
+
+function scheduleMissingFinalRecovery(threadId, turnId, attempt = 0) {
+  if (!threadId || !turnId) {
+    return;
+  }
+
+  const key = missingFinalRecoveryKey(threadId, turnId);
+  if (attempt === 0 && missingFinalRecoveryTimers.has(key)) {
+    return;
+  }
+
+  if (attempt >= 20) {
+    clearMissingFinalRecovery(threadId, turnId);
+    return;
+  }
+
+  const delayMs = attempt === 0 ? 300 : 750;
+  const timerId = window.setTimeout(async () => {
+    missingFinalRecoveryTimers.delete(key);
+
+    try {
+      await loadThread(threadId, true, false);
+    } catch {
+      scheduleMissingFinalRecovery(threadId, turnId, attempt + 1);
+      return;
+    }
+
+    if (state.selectedThreadId === threadId && hasFinalTurnMessage(state.selectedThread, turnId)) {
+      renderMessages(autoScrollPinned);
+      return;
+    }
+
+    scheduleMissingFinalRecovery(threadId, turnId, attempt + 1);
+  }, delayMs);
+
+  missingFinalRecoveryTimers.set(key, timerId);
+}
+
 function inferActiveTurnId(thread) {
   if (normalizeStatus(thread?.status) !== "active") {
     return null;
@@ -1219,6 +1331,7 @@ function syncActiveThreadState(thread) {
 
   if (thread?.id && nextActiveTurnId) {
     state.activeTurnId = nextActiveTurnId;
+    backfillThreadActivity(thread);
     startActiveThreadSync(thread.id);
   } else if (state.selectedThreadId === thread?.id || !thread?.id) {
     state.activeTurnId = null;
@@ -1594,7 +1707,7 @@ async function loadThreads() {
     archived: false,
     limit: 100,
     sortKey: "updated_at",
-    sourceKinds: ["cli", "appServer", "exec"],
+    sourceKinds: ["cli", "appServer", "exec", "vscode"],
   });
 
   state.threads = response.data || [];
@@ -1660,6 +1773,8 @@ async function loadThread(threadId, includeTurns = true, forceScrollToBottom = t
   const requestId = (state.threadLoadRequestIds.get(threadId) || 0) + 1;
   state.threadLoadRequestIds.set(threadId, requestId);
 
+  await ensureResumed(threadId);
+
   const response = await rpc("thread/read", {
     includeTurns: true,
     threadId,
@@ -1675,10 +1790,18 @@ async function loadThread(threadId, includeTurns = true, forceScrollToBottom = t
   }
 
   const previousTurns = state.selectedThread?.turns || [];
+  const previousActiveTurnId = state.selectedThreadId === threadId
+    ? (state.activeTurnId || inferActiveTurnId(state.selectedThread))
+    : null;
   const recoveredTurns = mergeTurns(replayTurns, response.thread.turns || []);
   state.selectedThread = response.thread;
   state.selectedThread.turns = mergeTurns(previousTurns, recoveredTurns);
   clearResolvedFinalAssistantFallbacks(state.selectedThread);
+  for (const turn of state.selectedThread.turns || []) {
+    if (hasFinalTurnMessage(state.selectedThread, turn.id)) {
+      clearMissingFinalRecovery(state.selectedThread.id, turn.id);
+    }
+  }
   for (const turn of recoveredTurns || []) {
     for (const item of turn.items || []) {
       rememberItemType(item, "read");
@@ -1688,6 +1811,13 @@ async function loadThread(threadId, includeTurns = true, forceScrollToBottom = t
   state.threads = state.threads.map((thread) =>
     thread.id === response.thread.id ? { ...thread, ...response.thread } : thread,
   );
+  if (
+    previousActiveTurnId
+    && normalizeStatus(state.selectedThread.status) !== "active"
+    && !hasFinalTurnMessage(state.selectedThread, previousActiveTurnId)
+  ) {
+    scheduleMissingFinalRecovery(state.selectedThread.id, previousActiveTurnId);
+  }
   reconcileThreadActivity(state.selectedThread, { clearPending: true });
   syncActiveThreadState(state.selectedThread);
   openView("chat");
@@ -1698,17 +1828,55 @@ async function loadThread(threadId, includeTurns = true, forceScrollToBottom = t
   }
 }
 
+function resumableThreadStatus(threadId) {
+  const summary = state.threads.find((entry) => entry.id === threadId);
+  const selected = state.selectedThreadId === threadId ? state.selectedThread : null;
+  const statuses = [normalizeStatus(selected?.status), normalizeStatus(summary?.status)];
+
+  if (statuses.includes("active")) {
+    return "active";
+  }
+
+  if (statuses.includes("notLoaded")) {
+    return "notLoaded";
+  }
+
+  return statuses.find((status) => status && status !== "unknown") || "unknown";
+}
+
 async function ensureResumed(threadId) {
-  const thread = state.threads.find((entry) => entry.id === threadId);
-  if (normalizeStatus(thread?.status) !== "notLoaded") {
+  if (!threadId) {
     return;
   }
 
-  await rpc("thread/resume", {
+  const status = resumableThreadStatus(threadId);
+  if (status !== "active" && status !== "notLoaded") {
+    return;
+  }
+
+  if (liveResumedThreadIds.has(threadId)) {
+    return;
+  }
+
+  if (liveResumeRequests.has(threadId)) {
+    await liveResumeRequests.get(threadId);
+    return;
+  }
+
+  const resumePromise = rpc("thread/resume", {
     cwd: "/root",
     threadId,
     ...currentThreadOptions(),
-  });
+  })
+    .then(() => {
+      liveResumedThreadIds.add(threadId);
+    })
+    .finally(() => {
+      liveResumeRequests.delete(threadId);
+    });
+
+  liveResumeRequests.set(threadId, resumePromise);
+  await resumePromise;
 }
 
 async function createThread(promptText, attachments = []) {
@@ -1998,12 +2166,22 @@ async function handleNotification(payload) {
   }
 
   if (method === "thread/status/changed") {
+    const previousActiveTurnId = state.selectedThreadId === params.threadId
+      ? (state.activeTurnId || inferActiveTurnId(state.selectedThread))
+      : null;
     state.threads = state.threads.map((thread) =>
       thread.id === params.threadId ? { ...thread, status: params.status } : thread,
     );
 
     if (state.selectedThreadId === params.threadId && state.selectedThread) {
       state.selectedThread = { ...state.selectedThread, status: params.status };
+      if (
+        previousActiveTurnId
+        && normalizeStatus(params.status) !== "active"
+        && !hasFinalTurnMessage(state.selectedThread, previousActiveTurnId)
+      ) {
+        scheduleMissingFinalRecovery(params.threadId, previousActiveTurnId);
+      }
       reconcileThreadActivity(state.selectedThread);
       syncActiveThreadState(state.selectedThread);
     }
@@ -2210,6 +2388,9 @@ async function handleNotification(payload) {
       window.setTimeout(() => elements.promptInput.focus(), 0);
 
       await loadThread(params.threadId, true, false).catch(() => {});
+      if (!hasFinalTurnMessage(state.selectedThread, completedTurnId)) {
+        scheduleMissingFinalRecovery(params.threadId, completedTurnId);
+      }
 
       const nextQueuedIndex = state.queuedPrompts.findIndex((entry) => entry.threadId === params.threadId);
       if (nextQueuedIndex >= 0) {
@@ -2218,31 +2399,6 @@ async function handleNotification(payload) {
         await startTurn(params.threadId, nextQueued.promptText, nextQueued.attachments || []);
         return;
       }
-
-      window.setTimeout(() => {
-        loadThread(params.threadId, true, false).catch(() => {});
-      }, 250);
-      window.setTimeout(() => {
-        loadThread(params.threadId, true, false).catch(() => {});
-      }, 1200);
-
-      const pollForFinal = async (attempt = 0) => {
-        await loadThread(params.threadId, true, false).catch(() => {});
-        if (hasFinalTurnMessage(state.selectedThread, completedTurnId)) {
-          renderMessages(autoScrollPinned);
-          return;
-        }
-        if (attempt >= 20) {
-          return;
-        }
-        window.setTimeout(() => {
-          pollForFinal(attempt + 1).catch(() => {});
-        }, 750);
-      };
-
-      window.setTimeout(() => {
-        pollForFinal().catch(() => {});
-      }, 300);
     } else {
       await loadThreads();
     }
@@ -2324,9 +2480,13 @@ function startActiveThreadSync(threadId) {
       return;
     }
 
+    const trackedTurnId = state.activeTurnId || inferActiveTurnId(state.selectedThread);
     try {
       await loadThread(threadId, true, false);
       if (normalizeStatus(state.selectedThread?.status) !== "active") {
+        if (trackedTurnId && !hasFinalTurnMessage(state.selectedThread, trackedTurnId)) {
+          scheduleMissingFinalRecovery(threadId, trackedTurnId);
+        }
         stopActiveThreadSync();
       }
     } catch {
@@ -2351,6 +2511,8 @@ const transport = createCodexTransport({
     renderConnection(state);
   },
   onOpen: async () => {
+    liveResumedThreadIds.clear();
+    liveResumeRequests.clear();
     await initializeConnection();
     await loadAccountState();
     await loadModels();
@@ -2364,6 +2526,8 @@ const transport = createCodexTransport({
   },
   onNotification: handleNotification,
   onClose: () => {
+    liveResumedThreadIds.clear();
+    liveResumeRequests.clear();
     state.lastError = null;
   },
   onError: (error) => {
