@@ -1604,6 +1604,7 @@ function buildTurnSandboxPolicy() {
 function currentTurnOptions() {
   return {
     approvalPolicy: state.settings.approvalPolicy,
+    developerInstructions: buildDeveloperInstructions(),
     effort: state.settings.reasoningEffort || null,
     model: state.settings.model || null,
     personality: state.settings.personality || null,
